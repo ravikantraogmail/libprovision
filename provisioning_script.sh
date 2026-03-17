@@ -145,31 +145,51 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 9. Clone project code (if REPO_URL env var is set)
+# 9. Sparse-clone /autostorygen subfolder from Azure DevOps repo
+#    Requires: REPO_PAT = Azure DevOps Personal Access Token (read-only)
 # -----------------------------------------------------------------------------
-if [ -n "$REPO_URL" ]; then
-    log "Cloning repo: $REPO_URL ..."
-    git clone "$REPO_URL" /workspace/autostorygen \
-        && log "Repo cloned OK" \
-        || fail "Repo clone failed"
+AZURE_REPO="https://ravikantrao.visualstudio.com/_git/onlinepharamacy-project"
+MGMT_SCRIPT="/workspace/autostorygen/scripts/mgmt_server.py"
+
+if [ -n "$REPO_PAT" ]; then
+    log "Cloning /autostorygen subfolder (sparse, depth=1) ..."
+
+    # Embed PAT in URL for authentication (format: https://PAT@host/path)
+    AUTH_REPO="https://${REPO_PAT}@ravikantrao.visualstudio.com/_git/onlinepharamacy-project"
+
+    # Sparse shallow clone — only fetches objects needed, not full history
+    git clone \
+        --depth 1 \
+        --filter=blob:none \
+        --sparse \
+        --no-tags \
+        "$AUTH_REPO" /tmp/repo_clone \
+        && log "Repo cloned (shallow)" \
+        || fail "Repo clone failed — check REPO_PAT"
+
+    # Pull only the autostorygen subfolder
+    cd /tmp/repo_clone || fail "Could not cd to /tmp/repo_clone"
+    git sparse-checkout set autostorygen \
+        && log "Sparse checkout: autostorygen/ only" \
+        || fail "Sparse checkout failed"
+
+    # Move to workspace
+    mkdir -p /workspace
+    mv /tmp/repo_clone/autostorygen /workspace/autostorygen \
+        && log "Code at /workspace/autostorygen" \
+        || fail "Could not move autostorygen to /workspace"
+
+    # Clean up tmp clone
+    rm -rf /tmp/repo_clone
+    log "Repo clone complete"
 else
-    log "REPO_URL not set — skipping code clone (push via manage_gpu.py)"
+    log "REPO_PAT not set — skipping clone (push code via: python scripts/manage_gpu.py push-code)"
+    log "mgmt_server.py must be pushed manually before management server can start"
 fi
 
 # -----------------------------------------------------------------------------
-# 10. Download mgmt_server.py from libprovision repo and start it
+# 10. Start permanent management server on port 8001
 # -----------------------------------------------------------------------------
-log "Downloading mgmt_server.py from libprovision repo..."
-
-LIBPROVISION_RAW="https://raw.githubusercontent.com/ravikantraogmail/libprovision/main"
-MGMT_DIR="/workspace/autostorygen/scripts"
-MGMT_SCRIPT="$MGMT_DIR/mgmt_server.py"
-
-mkdir -p "$MGMT_DIR"
-curl -fsSL "$LIBPROVISION_RAW/mgmt_server.py" -o "$MGMT_SCRIPT" \
-    && log "mgmt_server.py downloaded OK" \
-    || { log "WARNING: Failed to download mgmt_server.py — check repo URL"; }
-
 log "Starting management server on port 8001..."
 if [ -f "$MGMT_SCRIPT" ]; then
     cd /workspace/autostorygen || fail "Could not cd to /workspace/autostorygen"
@@ -185,8 +205,8 @@ if [ -f "$MGMT_SCRIPT" ]; then
         log "WARNING: Management server did not respond — check /tmp/mgmt_server.log"
     fi
 else
-    log "ERROR: mgmt_server.py not found at $MGMT_SCRIPT"
-    log "  Bootstrap manually: python scripts/manage_gpu.py --ssh '...' bootstrap"
+    log "WARNING: mgmt_server.py not found — REPO_PAT may not have been set"
+    log "  Bootstrap: python scripts/manage_gpu.py --ssh '...' bootstrap"
 fi
 
 # -----------------------------------------------------------------------------
