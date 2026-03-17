@@ -72,16 +72,17 @@ apt-get update -qq && apt-get install -y -qq \
 # 5. FastAPI server dependencies (always needed)
 # -----------------------------------------------------------------------------
 log "Installing FastAPI + uvicorn..."
+# requests, numpy, Pillow, huggingface-hub already in vastai/pytorch base image
 pip install --quiet --timeout 120 \
     fastapi \
     "uvicorn[standard]" \
-    requests \
     && log "FastAPI installed OK" \
     || fail "FastAPI installation failed"
 
 # -----------------------------------------------------------------------------
 # 6. Phase 6 + 7 — FLUX portraits & LTX-Video clips
 #    (diffusers requires pydantic v2)
+#    Note: torch, numpy, Pillow, huggingface-hub already in base image
 # -----------------------------------------------------------------------------
 log "Installing diffusers stack (phases 6+7)..."
 pip install --quiet --timeout 120 \
@@ -90,7 +91,6 @@ pip install --quiet --timeout 120 \
     "accelerate>=1.0.0" \
     "sentencepiece>=0.2.0" \
     "protobuf>=4.0.0" \
-    "Pillow>=10.0.0" \
     "imageio>=2.34.0" \
     "imageio-ffmpeg>=0.5.0" \
     "opencv-python-headless>=4.9.0" \
@@ -101,10 +101,10 @@ pip install --quiet --timeout 120 \
 # 7. Phase 8+9 — Kokoro TTS
 # -----------------------------------------------------------------------------
 log "Installing Kokoro TTS (phases 8+9)..."
+# numpy already in vastai/pytorch base image
 pip install --quiet --timeout 120 \
     "kokoro>=0.9.2" \
     "soundfile>=0.12.1" \
-    numpy \
     && log "Kokoro TTS installed OK" \
     || fail "Kokoro TTS installation failed"
 
@@ -151,7 +151,9 @@ fi
 AZURE_REPO="https://ravikantrao.visualstudio.com/_git/onlinepharamacy-project"
 MGMT_SCRIPT="/workspace/autostorygen/scripts/mgmt_server.py"
 
-if [ -n "$REPO_PAT" ]; then
+if [ -n "$SKIP_CLONE" ]; then
+    log "SKIP_CLONE set — using mounted/existing code at /workspace/autostorygen"
+elif [ -n "$REPO_PAT" ]; then
     log "Cloning /autostorygen subfolder (sparse, depth=1) ..."
 
     # Embed PAT in URL for authentication (format: https://PAT@host/path)
@@ -185,7 +187,7 @@ if [ -n "$REPO_PAT" ]; then
 else
     log "REPO_PAT not set — skipping clone (push code via: python scripts/manage_gpu.py push-code)"
     log "mgmt_server.py must be pushed manually before management server can start"
-fi
+fi  # end SKIP_CLONE / REPO_PAT block
 
 # -----------------------------------------------------------------------------
 # 10. Start permanent management server on port 8001
