@@ -177,12 +177,16 @@ def get_logs(lines: int = Query(default=60, ge=1, le=500)):
 @app.get("/status")
 def status():
     """GPU memory usage + running inference server process info."""
-    nvidia = subprocess.run(
-        ["nvidia-smi",
-         "--query-gpu=memory.used,memory.total,utilization.gpu",
-         "--format=csv,noheader,nounits"],
-        capture_output=True, text=True
-    )
+    try:
+        nvidia = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=memory.used,memory.total,utilization.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True
+        )
+        gpu_info = nvidia.stdout.strip() or "no output"
+    except FileNotFoundError:
+        gpu_info = "nvidia-smi not available (no GPU)"
     ps = subprocess.run(
         ["pgrep", "-af", "uvicorn"],
         capture_output=True, text=True
@@ -195,7 +199,7 @@ def status():
         pass
 
     return {
-        "gpu":              nvidia.stdout.strip(),
+        "gpu":              gpu_info,
         "inference_server": ps.stdout.strip(),
         "inference_healthy": inference_healthy,
     }
