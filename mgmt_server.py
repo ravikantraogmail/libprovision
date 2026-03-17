@@ -157,6 +157,13 @@ def restart_server(phase: int = Query(...)):
     }
 
 
+@app.post("/stop")
+def stop_server():
+    """Kill the inference server without starting a new one."""
+    _kill_inference_server()
+    return {"status": "ok", "message": "inference server stopped"}
+
+
 @app.get("/logs")
 def get_logs(lines: int = Query(default=60, ge=1, le=500)):
     """Return the last N lines of the inference server log."""
