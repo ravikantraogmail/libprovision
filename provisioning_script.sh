@@ -76,6 +76,7 @@ log "Installing FastAPI + uvicorn..."
 pip install --quiet --timeout 120 \
     fastapi \
     "uvicorn[standard]" \
+    python-multipart \
     && log "FastAPI installed OK" \
     || fail "FastAPI installation failed"
 
