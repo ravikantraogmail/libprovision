@@ -172,6 +172,7 @@ curl -fsSL "$LIBPROVISION_RAW/mgmt_server.py" -o "$MGMT_SCRIPT" \
 
 log "Starting management server on port 8001..."
 if [ -f "$MGMT_SCRIPT" ]; then
+    cd /workspace/autostorygen || fail "Could not cd to /workspace/autostorygen"
     HF_HOME=/workspace/.hf_home HF_TOKEN="$HF_TOKEN" \
         nohup python3 -u -m uvicorn scripts.mgmt_server:app \
         --host 0.0.0.0 --port 8001 --workers 1 \
