@@ -50,8 +50,18 @@ PHASE_PIP: dict[int, list[str]] = {
 # Helpers
 # ---------------------------------------------------------------------------
 def _kill_inference_server() -> None:
-    """Kill all python3/uvicorn processes and wait for GPU VRAM to free."""
-    subprocess.run(["pkill", "-9", "-f", "python3"], capture_output=True)
+    """Kill the inference server process only (not the management server)."""
+    # Kill by saved PID first (most precise)
+    pid_file = Path(GPU_PID)
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            subprocess.run(["kill", "-9", str(pid)], capture_output=True)
+            pid_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+    # Also kill by uvicorn pattern targeting gpu_server specifically
+    subprocess.run(["pkill", "-9", "-f", "gpu_server"], capture_output=True)
     time.sleep(5)
 
 
