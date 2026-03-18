@@ -36,9 +36,8 @@ HF_TOKEN    = os.getenv("HF_TOKEN", "")
 PHASE_PIP: dict[int, list[str]] = {
     6:  ["diffusers>=0.32.0", "transformers>=4.45.0", "accelerate>=1.0.0",
          "sentencepiece>=0.2.0", "protobuf>=4.0.0", "Pillow>=10.0.0"],
-    7:  ["diffusers>=0.32.0", "transformers>=4.45.0", "accelerate>=1.0.0",
-         "sentencepiece>=0.2.0", "imageio>=2.34.0", "imageio-ffmpeg>=0.5.0",
-         "opencv-python-headless>=4.9.0", "Pillow>=10.0.0"],
+    7:  ["diffusers>=0.33.0", "transformers>=4.45.0", "accelerate>=1.0.0",
+         "sentencepiece>=0.2.0", "Pillow>=10.0.0", "ftfy>=6.0.0"],
     8:  ["kokoro>=0.9.2", "soundfile>=0.12.1", "numpy"],
     9:  ["kokoro>=0.9.2", "soundfile>=0.12.1", "numpy"],
     89: ["kokoro>=0.9.2", "soundfile>=0.12.1", "numpy"],
