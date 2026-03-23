@@ -1,10 +1,26 @@
 #!/bin/bash
 # =============================================================================
-# Vast.ai Provisioning Script — Tales from Willowwood Forest (autostorygen)
+# Vast.ai Provisioning Script — Tales from the Indian Jungle (autostorygen)
 # =============================================================================
-# This script runs automatically when a new vast.ai instance starts.
-# It installs all dependencies for Phases 6-9 (FLUX, LTX-Video, Kokoro TTS).
-# Phases 10-11 (AudioCraft) are installed separately to avoid pydantic conflict.
+# Runs automatically when a new vast.ai instance starts (injected as the
+# onstart command by scripts/vast_provisioner.py).
+#
+# What this script does:
+#   1. Installs system packages (ffmpeg, libav)
+#   2. Installs FastAPI + uvicorn (management server)
+#   3. Installs diffusers stack (Phases 6+7 — FLUX portraits + LTX-Video)
+#   4. Installs Kokoro TTS (Phases 8+9)
+#   5. Sets up HuggingFace cache on /workspace (not root disk)
+#   6. Logs in to HuggingFace (for gated FLUX model)
+#   7. Starts the management server on port 8001 (if code is present)
+#
+# NOTE: Phases 10+11 (AudioCraft/MusicGen) use pydantic v1 which conflicts
+# with diffusers. They are installed on-demand when the phase switches.
+#
+# After this script finishes:
+#   python scripts/vast_provisioner.py status    # wait for "running"
+#   python scripts/vast_provisioner.py tunnel    # open SSH tunnel
+#   python scripts/manage_gpu.py bootstrap --ssh "..."  # push code + start mgmt server
 # =============================================================================
 
 LOG_FILE="/workspace/provisioning_log.txt"
@@ -33,7 +49,7 @@ log "Python: $(python3 --version)"
 log "pip:    $(pip --version)"
 
 # -----------------------------------------------------------------------------
-# 3. Ensure 'python' resolves to python3 (vast.ai only has python3 by default)
+# 3. Ensure 'python' resolves to python3
 # -----------------------------------------------------------------------------
 if ! command -v python &>/dev/null; then
     log "python not found — creating symlink python -> python3"
@@ -51,7 +67,7 @@ cd /workspace || fail "Could not cd to /workspace"
 log "Working directory: $(pwd)"
 
 # -----------------------------------------------------------------------------
-# 4. System packages (ffmpeg + libav for audiocraft/imageio)
+# 5. System packages (ffmpeg + libav for audiocraft/imageio)
 # -----------------------------------------------------------------------------
 log "Installing system packages..."
 apt-get update -qq && apt-get install -y -qq \
@@ -69,10 +85,9 @@ apt-get update -qq && apt-get install -y -qq \
     || fail "System package installation failed"
 
 # -----------------------------------------------------------------------------
-# 5. FastAPI server dependencies (always needed)
+# 6. FastAPI + uvicorn (management server — always needed)
 # -----------------------------------------------------------------------------
 log "Installing FastAPI + uvicorn..."
-# requests, numpy, Pillow, huggingface-hub already in vastai/pytorch base image
 pip install --quiet --timeout 120 \
     fastapi \
     "uvicorn[standard]" \
@@ -81,9 +96,8 @@ pip install --quiet --timeout 120 \
     || fail "FastAPI installation failed"
 
 # -----------------------------------------------------------------------------
-# 6. Phase 6 + 7 — FLUX portraits & LTX-Video clips
-#    (diffusers requires pydantic v2)
-#    Note: torch, numpy, Pillow, huggingface-hub already in base image
+# 7. Phases 6+7 — diffusers stack (FLUX portraits + LTX-Video clips)
+#    torch, numpy, Pillow, huggingface-hub already in vastai/pytorch base image
 # -----------------------------------------------------------------------------
 log "Installing diffusers stack (phases 6+7)..."
 pip install --quiet --timeout 120 \
@@ -99,34 +113,31 @@ pip install --quiet --timeout 120 \
     || fail "Diffusers stack installation failed"
 
 # -----------------------------------------------------------------------------
-# 7. Phase 8+9 — Kokoro TTS
+# 8. Phases 8+9 — Kokoro TTS
 # -----------------------------------------------------------------------------
 log "Installing Kokoro TTS (phases 8+9)..."
-# numpy already in vastai/pytorch base image
 pip install --quiet --timeout 120 \
     "kokoro>=0.9.2" \
     "soundfile>=0.12.1" \
     && log "Kokoro TTS installed OK" \
     || fail "Kokoro TTS installation failed"
 
-# NOTE: Phase 10+11 (AudioCraft/MusicGen) uses pydantic v1 which conflicts
-# with diffusers. Install separately when switching to phase 10:
-#   pip install audiocraft soundfile
-# This will downgrade pydantic — only run AFTER all diffusers phases are done.
+# NOTE: Phases 10+11 (AudioCraft/MusicGen) require pydantic v1 which conflicts
+# with diffusers. They are installed on-demand when the mgmt server restarts
+# for phase 10 — do NOT install here.
 
 # -----------------------------------------------------------------------------
-# 8. HuggingFace cache on /workspace (NOT /root/.cache — root disk is only 70GB)
+# 9. HuggingFace cache on /workspace (NOT /root/.cache — root disk ~70GB only)
 # -----------------------------------------------------------------------------
 log "Setting up HuggingFace cache on /workspace..."
 mkdir -p /workspace/.hf_home
 
-# Persist HF_HOME + PYTORCH settings so every new shell/server picks them up
+# Persist env vars so every new shell and server process picks them up
 cat >> /etc/environment <<'EOF'
 HF_HOME=/workspace/.hf_home
 PYTORCH_ALLOC_CONF=expandable_segments:True
 EOF
 
-# Also add to venv activate so they apply when venv is sourced
 cat >> /venv/main/bin/activate <<'EOF'
 export HF_HOME=/workspace/.hf_home
 export PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -134,7 +145,7 @@ EOF
 
 log "HF_HOME and PYTORCH_ALLOC_CONF set permanently"
 
-# Login to HuggingFace (required for gated models like FLUX.1-schnell)
+# Log in to HuggingFace (required for gated FLUX.1-schnell model)
 if [ -n "$HF_TOKEN" ]; then
     log "Logging in to HuggingFace (HF_TOKEN is set)..."
     python3 -c "from huggingface_hub import login; login('$HF_TOKEN')" \
@@ -142,59 +153,23 @@ if [ -n "$HF_TOKEN" ]; then
         || log "WARNING: HuggingFace login failed — gated models (FLUX) may not download"
 else
     log "WARNING: HF_TOKEN not set — FLUX.1-schnell will fail (gated model)"
-    log "  Set HF_TOKEN in template env vars or export HF_TOKEN=hf_... before running"
+    log "  Set HF_TOKEN in .env before running vast_provisioner.py provision"
 fi
 
 # -----------------------------------------------------------------------------
-# 9. Sparse-clone /autostorygen subfolder from Azure DevOps repo
-#    Requires: REPO_PAT = Azure DevOps Personal Access Token (read-only)
+# 10. Start management server on port 8001 (if code already present)
+#
+# Code is pushed AFTER provisioning via:
+#   python scripts/manage_gpu.py --ssh "..." bootstrap
+# So this block only starts the server when code was pre-loaded (e.g. re-use
+# of an existing instance or SKIP_CLONE workflow). On a fresh instance the
+# mgmt_server.py file won't exist yet — that's expected and non-fatal.
 # -----------------------------------------------------------------------------
-AZURE_REPO="https://ravikantrao.visualstudio.com/_git/onlinepharamacy-project"
 MGMT_SCRIPT="/workspace/autostorygen/scripts/mgmt_server.py"
 
-if [ -n "$SKIP_CLONE" ]; then
-    log "SKIP_CLONE set — using mounted/existing code at /workspace/autostorygen"
-elif [ -n "$REPO_PAT" ]; then
-    log "Cloning /autostorygen subfolder (sparse, depth=1) ..."
-
-    # Embed PAT in URL for authentication (format: https://PAT@host/path)
-    AUTH_REPO="https://${REPO_PAT}@ravikantrao.visualstudio.com/_git/onlinepharamacy-project"
-
-    # Sparse shallow clone — only fetches objects needed, not full history
-    git clone \
-        --depth 1 \
-        --filter=blob:none \
-        --sparse \
-        --no-tags \
-        "$AUTH_REPO" /tmp/repo_clone \
-        && log "Repo cloned (shallow)" \
-        || fail "Repo clone failed — check REPO_PAT"
-
-    # Pull only the autostorygen subfolder
-    cd /tmp/repo_clone || fail "Could not cd to /tmp/repo_clone"
-    git sparse-checkout set autostorygen \
-        && log "Sparse checkout: autostorygen/ only" \
-        || fail "Sparse checkout failed"
-
-    # Move to workspace
-    mkdir -p /workspace
-    mv /tmp/repo_clone/autostorygen /workspace/autostorygen \
-        && log "Code at /workspace/autostorygen" \
-        || fail "Could not move autostorygen to /workspace"
-
-    # Clean up tmp clone
-    rm -rf /tmp/repo_clone
-    log "Repo clone complete"
-else
-    log "REPO_PAT not set — skipping clone (push code via: python scripts/manage_gpu.py push-code)"
-    log "mgmt_server.py must be pushed manually before management server can start"
-fi  # end SKIP_CLONE / REPO_PAT block
-
-# -----------------------------------------------------------------------------
-# 10. Start permanent management server on port 8001
-# -----------------------------------------------------------------------------
-log "Starting management server on port 8001..."
+log "Checking for management server..."
 if [ -f "$MGMT_SCRIPT" ]; then
+    log "Starting management server on port 8001..."
     cd /workspace/autostorygen || fail "Could not cd to /workspace/autostorygen"
     HF_HOME=/workspace/.hf_home HF_TOKEN="$HF_TOKEN" \
         nohup python3 -u -m uvicorn scripts.mgmt_server:app \
@@ -208,19 +183,23 @@ if [ -f "$MGMT_SCRIPT" ]; then
         log "WARNING: Management server did not respond — check /tmp/mgmt_server.log"
     fi
 else
-    log "WARNING: mgmt_server.py not found — REPO_PAT may not have been set"
-    log "  Bootstrap: python scripts/manage_gpu.py --ssh '...' bootstrap"
+    log "Code not present yet — management server will be started after code push."
+    log "  Next step on your laptop:"
+    log "    python scripts/vast_provisioner.py tunnel    # open SSH tunnel"
+    log "    python scripts/manage_gpu.py --ssh '...' bootstrap  # push code + start mgmt"
 fi
 
 # -----------------------------------------------------------------------------
 # 11. Done
 # -----------------------------------------------------------------------------
 log "=== Provisioning complete ==="
-log "Installed packages summary:"
+log ""
+log "Installed packages:"
 pip show diffusers transformers accelerate kokoro fastapi uvicorn 2>/dev/null \
     | grep -E "^Name|^Version" | tee -a "$LOG_FILE"
 log ""
-log "Next steps:"
-log "  1. Run SSH tunnel on laptop: ssh -L 8000:localhost:8000 -N ..."
-log "  2. Push code:   python scripts/manage_gpu.py --ssh '...' push-code"
-log "  3. Start server: python scripts/manage_gpu.py --ssh '...' start-server --phase 6"
+log "Next steps on your laptop:"
+log "  python scripts/vast_provisioner.py status          # confirm instance is running"
+log "  python scripts/vast_provisioner.py tunnel          # print + run SSH tunnel command"
+log "  python scripts/manage_gpu.py --ssh '...' bootstrap # push code + start mgmt server"
+log "  python scripts/manage_gpu.py start-server --phase 6"
